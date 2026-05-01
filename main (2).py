@@ -482,5 +482,120 @@ def create_gui(bot_instance, db_manager):
         sys.exit()
 
     buttons.append(("Выход", pygame.Rect(button_x, button_y_start + 5 * button_spacing, button_width, button_height), exit_app))
+ # Просмотр новостей: переключаем режим
+    view_news_mode = False
+    news_lines = []
+    news_offset = 0
 
+    def toggle_view_news():
+        nonlocal view_news_mode, news_lines
+        view_news_mode = not view_news_mode
+        if view_news_mode:
+            news = db_manager.load_news()
+            news_lines = []
+            for item in news:
+                news_lines.append(f"{item['title']}: {item['link']}")
+                news_lines.append(f"{item['summary'][:100]}...")
+                news_lines.append("")  # Пустая строка для разделения
+            log_lines.append("Просмотр новостей открыт.")
+        else:
+            log_lines.append("Просмотр новостей закрыт.")
+
+    buttons.append(("Просмотреть новости", pygame.Rect(button_x, button_y_start + 3 * button_spacing, button_width, button_height), toggle_view_news))
+
+    def make_backup():
+        backup_to_json(db_manager)
+        log_lines.append("Info: Бэкап создан!")
+
+    buttons.append(("Создать бэкап", pygame.Rect(button_x, button_y_start + 4 * button_spacing, button_width, button_height), make_backup))
+
+    def exit_app():
+        db_manager.close()
+        pygame.quit()
+        sys.exit()
+
+    buttons.append(("Выход", pygame.Rect(button_x, button_y_start + 5 * button_spacing, button_width, button_height), exit_app))
+
+    # Лог область: ниже заголовка, справа от кнопок? Но для простоты - внизу
+    log_rect = pygame.Rect(10, 300, 580, 190)  # Область для логов
+
+    running = True
+    while running:
+        screen.fill(WHITE)
+
+        # Отрисовка заголовка
+        title_surf = font_large.render("Управление расширенным ботом для маникюра", True, BLACK)
+        screen.blit(title_surf, (50, 10))
+
+        # Обработка событий
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:  # Левый клик
+                    mouse_pos = pygame.mouse.get_pos()
+                    for text, rect, func in buttons:
+                        if rect.collidepoint(mouse_pos):
+                            func()
+            if event.type == pygame.MOUSEWHEEL:
+                if view_news_mode:
+                    news_offset -= event.y * 3  # Прокрутка новостей
+                    news_offset = max(0, min(news_offset, max(0, len(news_lines) - max_log_lines)))
+                else:
+                    log_offset -= event.y * 3  # Прокрутка логов
+                    log_offset = max(0, min(log_offset, max(0, len(log_lines) - max_log_lines)))
+
+        if view_news_mode:
+            # Режим просмотра новостей
+            news_title_surf = font_medium.render("Новости:", True, BLACK)
+            screen.blit(news_title_surf, (10, 50))
+            for i in range(max_log_lines):
+                idx = news_offset + i
+                if idx < len(news_lines):
+                    line_surf = font_small.render(news_lines[idx], True, BLACK)
+                    screen.blit(line_surf, (10, 80 + i * 20))
+        else:
+            # Отрисовка кнопок
+            for text, rect, func in buttons:
+                pygame.draw.rect(screen, LIGHT_BLUE, rect)
+                text_surf = font_medium.render(text, True, BLACK)
+                text_rect = text_surf.get_rect(center=rect.center)
+                screen.blit(text_surf, text_rect)
+
+            # Отрисовка логов
+            pygame.draw.rect(screen, GRAY, log_rect, 2)  # Рамка
+            for i in range(max_log_lines):
+                idx = log_offset + i
+                if idx < len(log_lines):
+                    line_surf = font_small.render(log_lines[idx], True, BLACK)
+                    screen.blit(line_surf, (15, 305 + i * 12))  # Меньший интервал для плотности
+
+        pygame.display.flip()
+        clock.tick(60)
+
+    db_manager.close()
+    pygame.quit()
+
+# Главная функция. Запускает всё.
+if __name__ == "__main__":
+    # Инициализация БД.
+    if not BOT_TOKEN:
+        raise RuntimeError("Не задан BOT_TOKEN. Установи переменную окружения BOT_TOKEN и перезапусти скрипт.")
+    db_manager = DatabaseManager(DB_FILE)
+    # Восстановление из бэкапа если нужно.
+    restore_from_json(db_manager)
+    # Загрузка настроек.
+    auto_update_setting = db_manager.load_setting('auto_update', 'on')
+    if auto_update_setting == 'on':
+        threading.Thread(target=auto_update, args=(db_manager,), daemon=True).start()
+    # Загрузка RSS из настроек если сохранены.
+    saved_feeds = db_manager.load_setting('rss_feeds')
+    if saved_feeds:
+        RSS_FEEDS = json.loads(saved_feeds)
+    # Инициализация бота.
+    bot = ManicureBot(BOT_TOKEN, db_manager)
+    if not db_manager.load_news():
+        news = parse_rss_feeds(bot.keywords)
+        db_manager.save_news(news)
+    create_gui(bot, db_manager)
 
